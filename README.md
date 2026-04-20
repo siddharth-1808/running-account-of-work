@@ -626,6 +626,297 @@ Key outcomes delivered in this batch:
 
 ---
 
+## 20th Apr 2026 — ST-ERP Platform: Third Batch of Releases
+
+Here's a concise, management‑friendly set of release notes for **all tickets currently in your editor context**. I've focused on the ones that are **Done / Ready for Deployment / UAT / Sanity / In Review** so this reads like a real change set, not the entire backlog.
+
+You can see the full issue list here:  
+https://zapgift.atlassian.net/issues/?jql=key%20in%20%28STERP26-80%2C%20STERP26-57%2C%20STERP26-81%2C%20STERP26-252%2C%20STERP26-281%2C%20STERP26-21%2C%20STERP26-133%2C%20STERP26-152%2C%20STERP26-155%2C%20STERP26-232%2C%20STERP26-238%2C%20STERP26-78%2C%20STERP26-8%2C%20STERP26-49%2C%20STERP26-53%2C%20STERP26-66%2C%20STERP26-68%2C%20STERP26-30%2C%20STERP26-52%2C%20STERP26-58%2C%20STERP26-116%2C%20STERP26-117%2C%20STERP26-56%2C%20STERP26-119%2C%20STERP26-120%2C%20STERP26-121%2C%20STERP26-123%2C%20STERP26-128%2C%20STERP26-138%2C%20STERP26-142%2C%20STERP26-146%2C%20STERP26-153%2C%20STERP26-132%2C%20STERP26-162%2C%20STERP26-174%2C%20STERP26-183%2C%20STERP26-187%2C%20STERP26-189%2C%20STERP26-192%2C%20STERP26-196%2C%20STERP26-197%2C%20STERP26-201%2C%20STERP26-209%2C%20STERP26-230%2C%20STERP26-239%2C%20STERP26-67%2C%20STERP26-274%2C%20STERP26-243%2C%20STERP26-255%2C%20STERP26-161%29%20ORDER%20BY%20key
+
+---
+
+### Management Summary
+
+This release hardens the ERP backbone across four themes:
+
+- **Delivery reliability & inventory correctness**  
+  - DN reservation is now driven by **actual SLEs**, reducing negative inventory and mismatched reservations (STERP26‑123).  
+  - Auto‑retry for **shipping updates to ER** prevents AWB sync failures from being lost on transient 4XXs (STERP26‑243).  
+  - Log archival and read‑replica work improve the stability and observability of DN/SLE behaviour (STERP26‑174, STERP26‑238, STERP26‑201, STERP26‑209).
+
+- **Finance & purchasing controls**  
+  - Draft PIs can now be safely **deleted** via RBAC (STERP26‑67).  
+  - Batch expiry validation is being formalised end‑to‑end for higher data quality (STERP26‑239, coupled with STERP26‑154 in another set).
+
+- **E‑commerce channel correctness**  
+  - Variant ID uniqueness removes a large class of Shopify/ERP catalog mismatches (STERP26‑230).  
+  - Offline/online channel mis‑classification has been fixed and RCA is documented (STERP26‑196, STERP26‑197).
+
+- **3PL / putaway robustness**  
+  - PR putaway handling now has a proper failure model, retry, and negative‑inventory surfacing (STERP26‑133, STERP26‑232).
+
+Overall, the changes reduce silent failures (DNs without SLEs, AWB not reaching ER, missing putaway), make finance operations safer, and improve our ability to debug and scale reporting.
+
+---
+
+### Ticket‑wise Release Notes
+
+Below I'm only listing issues that are **effectively "released" or in last‑mile stages**: `Done`, `Sanity`, `Ready for Deployment`, `UAT`, `In Review`. Others in `To Do` / `On Hold` / `In Progress` I've treated as out of scope for this set.
+
+---
+
+#### Delivery & Inventory Reliability
+
+##### Change the DN Reservation Logic to consider SLE instead of DN Status
+**Jira:** STERP26‑123 – https://zapgift.atlassian.net/browse/STERP26-123  
+**Status:** Sanity
+
+**What changed**
+
+- Reservation for Delivery Notes is now computed **solely from Stock Ledger Entries** instead of DN status fields.
+- DN status remains informational; the **single source of truth** for reserved stock is the SLE layer.
+- Inventory is considered un‑reserved only when the relevant SLE exists and reflects the movement.
+
+**Business impact**
+
+- Eliminates cases where stock looked "reserved" by status but had no corresponding SLE (or vice‑versa).  
+- Reduces over‑reservation and negative inventory scenarios, especially in high‑churn warehouses.  
+- Downstream systems now see availability that matches actual ledger entries 1:1.
+
+---
+
+##### Inventory sync between ER and ST
+**Jira:** STERP26‑209 – https://zapgift.atlassian.net/browse/STERP26-209  
+**Status:** UAT
+
+**What changed**
+
+- Implemented a recurring **batch_wise_stock_balance** based reconciliation for all 3PL warehouses.  
+- When ST inventory for a batch exceeds ER's, we now auto‑create **Material Transfer** entries to move surplus into the appropriate "missing" bin.  
+- Transfer quantity is capped at `min(ST Balance − ER Balance, ST Available Qty)` to avoid touching reserved stock.
+
+**Business impact**
+
+- ER and ST are kept materially aligned on batch‑wise inventory, reducing discrepancies during pick/pack.  
+- Fewer manual adjustments and "mystery" inventory gaps during audits.
+
+---
+
+##### 2‑fold Increase in DNs with Missing SLEs – Analysis
+**Jira:** STERP26‑201 – https://zapgift.atlassian.net/browse/STERP26-201  
+**Status:** In Review
+
+**What changed**
+
+- Performed a **time‑series analysis** on DNs with missing SLEs, highlighting a sharp rise from 24‑Feb onward.  
+- Established daily counts and clusters to tie into code paths and jobs that changed around that time.
+
+**Business impact**
+
+- Gives engineering and ops a clear baseline on the **scale and onset** of missing‑SLE failures.  
+- Feeds into remediation work (e.g. SLE creation fixes, log archival, read‑replica‑backed analysis).
+
+---
+
+##### Create a recurring job to archive logs at regular intervals
+**Jira:** STERP26‑174 – https://zapgift.atlassian.net/browse/STERP26-174  
+**Status:** UAT
+
+**What changed**
+
+- Added a **weekly cron job (Sunday 1 AM)** to archive high‑volume logs into a parallel table with identical schema.  
+- Keeps online tables light for day‑to‑day queries while retaining full history in the archive.
+
+**Business impact**
+
+- Improves performance for real‑time debugging and dashboards that read from current‑period logs.  
+- Reduces risk of log tables becoming operational bottlenecks without sacrificing traceability.
+
+---
+
+#### 3PL Putaway & PR Flow
+
+##### Handle Putaway for PRs with submission failure
+**Jira:** STERP26‑133 – https://zapgift.atlassian.net/browse/STERP26-133  
+**Status:** UAT
+
+**What changed**
+
+- When 3PL putaway confirmation is received, the system now:  
+  - Moves sellable qty to `%Unified_bin` and non‑sellable to `%Missing_bin` / `%Damage_bin`.  
+  - On **negative inventory failure**, logs the line as `Failed + Negative Inventory` and keeps the PR in **Draft**.
+- PR **submission is blocked** if no latest putaway confirmation exists, with a clear validation message.  
+- Each submit attempt re‑uses the **latest confirmation log**, re‑posting stock once issues are fixed.
+
+**Business impact**
+
+- PRs can no longer slip through without valid putaway; failures are visible and actionable.  
+- Negative inventory driven putaway errors are surfaced to the right stakeholders (cluster managers + ERP functional lead).  
+- Reduces hidden stock mis‑postings and manual firefighting around inbound flows.
+
+---
+
+#### E‑commerce & Channel Correctness
+
+##### Make Variant ID Unique
+**Jira:** STERP26‑230 – https://zapgift.atlassian.net/browse/STERP26-230  
+**Status:** UAT
+
+**What changed**
+
+- Enforced **uniqueness** of Shopify Variant IDs across ERP Item Codes.  
+- Validated that both **product_id** and **variant_id** are strictly numeric, disallowing formats (like dots) that caused mapping ambiguity.  
+- Backed by implementation in the e‑commerce integrations repo (`/pull/91`).
+
+**Business impact**
+
+- Removes 395+ known cases where a single variant pointed to multiple items.  
+- Stabilises bundle and stock sync logic, reducing chances of wrong item being fulfilled or displayed online.
+
+---
+
+##### Incorrect identification of Offline orders
+**Jira:** STERP26‑196 – https://zapgift.atlassian.net/browse/STERP26-196  
+**Status:** Done
+
+**What changed**
+
+- Fixed logic that was classifying some **online orders as offline**, preventing DN creation.  
+- Example: order **ST249354612507** now correctly flows through online DN creation.
+
+**Business impact**
+
+- Ensures that legitimate online orders reach pick/pack rather than silently stalling.  
+- Reduces manual investigation for "no DN created" incidents on online orders.
+
+---
+
+##### RCA on channel classification (Offline / Online / Dropship / AHS)
+**Jira:** STERP26‑197 – https://zapgift.atlassian.net/browse/STERP26-197  
+**Status:** Done
+
+**What changed**
+
+- Performed and documented an RCA for order **channel classification** logic.  
+- Clarified how channels are derived, where mis‑classifications originated, and what guardrails are needed.
+
+**Business impact**
+
+- Gives product and engineering a shared understanding of channel mapping rules, reducing recurrence of STERP26‑196‑type defects.  
+- Supports cleaner reporting and SLA tracking by channel.
+
+---
+
+#### Purchase & Finance Controls
+
+##### Enable Delete Option for Draft Purchase Invoices
+**Jira:** STERP26‑67 – https://zapgift.atlassian.net/browse/STERP26-67  
+**Status:** Done
+
+**What changed**
+
+- Introduced a **role‑based delete** capability for **Draft Purchase Invoices**.  
+- Deletion is **blocked** for Submitted / Cancelled PIs.  
+- Access is tied to the `Finance Invoice` profile.
+
+**Business impact**
+
+- Finance can clean up erroneous drafts without polluting the PI universe.  
+- No risk of accidental deletion of posted invoices or accounting history.
+
+---
+
+##### Batch Expiry Date Validation (PR & Batch)
+**Jira:** STERP26‑239 – https://zapgift.atlassian.net/browse/STERP26-239  
+**Status:** On Hold (pairs with STERP26‑154)
+
+**What's defined (for upcoming or partial rollout)**
+
+- Unifies expiry validation between batch master and PR:  
+  - Enforces `dd/mm/yyyy` format, caps expiry at **today + 9 years**, and ensures derived MFG ≤ today.  
+  - Blocks PR submit and import rows that violate these rules, with clear row‑level errors.  
+  - Applies GRN‑tolerance checks for non‑IWT channels.
+
+**Business impact (once fully live)**
+
+- Prevents impossible or non‑compliant expiry data from entering the system.  
+- Aligns batch and PR level dates, improving audit readiness and reducing downstream pricing/tax errors.
+
+---
+
+#### Shipping / ER Integration Hardening
+
+##### Auto‑retry on 4XX against Shipping Updates to ER
+**Jira:** STERP26‑243 – https://zapgift.atlassian.net/browse/STERP26-243  
+**Status:** Done
+
+**What changed**
+
+- Implemented an **automatic retry job** for AWB updates to ER when a **4XX** is returned from their side (known transient/integration issues).  
+- Ensures that initial failures don't permanently strand a DN in an "AWB not in ER" state.
+
+**Business impact**
+
+- Reduces manual resync work for shipping updates.  
+- Stabilises DN → ER tracking, especially during external partial outages or intermittent API errors.
+
+---
+
+#### Reporting & Analytics Foundations
+
+##### Historical Shelf‑wise Inventory Reporting API
+**Jira:** STERP26‑116 – https://zapgift.atlassian.net/browse/STERP26-116  
+**Status:** In Review
+
+**What changed**
+
+- Designed and implemented a **daily EOD snapshot** of **sellable** inventory (excluding disabled batches / rejected bins).  
+- Added an API that takes a **date** and returns `SKU, warehouse, available qty` for that day.
+
+**Business impact**
+
+- Enables demand and analytics tools to reason over **historical** (not just live) shelf‑wise inventory.  
+- Supports forecasting, ageing, and SLA analysis without impacting the transactional DB.
+
+---
+
+##### Read replica for reports / MCP server
+**Jira:** STERP26‑238 – https://zapgift.atlassian.net/browse/STERP26-238  
+**Status:** Developing (close to infra‑ready)
+
+**What's being delivered**
+
+- A **Model Context Protocol (MCP)** server that lets users query ERPNext read‑replica data via Claude Desktop, **respecting ERP permissions**:  
+  - Only `SELECT` queries allowed.  
+  - Table‑level access derived from ERP roles & DocPerms.  
+  - All queries forced to hit a **read replica**, with an enforced row limit.  
+- Includes a `list_my_accessible_tables` helper and environment‑driven config.
+
+**Business impact (as it goes live)**
+
+- Powerful ad‑hoc reporting without risking writes or bypassing ERP's RBAC.  
+- Offloads reporting load from the primary DB.
+
+---
+
+#### Misc DN / SLE Stability Work (Near Release)
+
+These are close to release (UAT/In Review) and part of the same reliability narrative:
+
+- **Bin Determination Revised Workflow**  
+  - STERP26‑183 – https://zapgift.atlassian.net/browse/STERP26-183 – Status: UAT  
+  - Clarifies and stabilises how bins are chosen for bundle and regular items, feeding into coherence fixes (STERP26‑162).
+
+- **Bundle Coherence breaking in some cases**  
+  - STERP26‑162 – https://zapgift.atlassian.net/browse/STERP26-162 – Status: In Review  
+  - Validates bundle integrity across SO → DN, closes edge gaps highlighted in new cases.
+
+- **Inventory transaction beyond batch expiry**  
+  - STERP26‑255 – https://zapgift.atlassian.net/browse/STERP26-255 – Status: On Hold but scoped  
+  - Defines stricter rules to skip reco on disabled/expired batches and report historical impact.
+
+---
+
 ## 18th Apr 2026 — ER–ST Inventory Signal Analysis
 
 ### What
