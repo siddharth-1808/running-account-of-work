@@ -427,19 +427,22 @@ Rather than patching Looker Studio, I made the call to redesign the entire solut
 ### What the Dashboard Does Today
 
 **Command Centre — the meeting view**
-The default view opens on yesterday's data with no configuration required. It shows EDD breach rate, total orders, orders per day, a 7-day sparkline, and per-stage breach rates at a glance. Breach counts are clickable and open a filtered list of the exact orders driving that number.
+The default view opens on yesterday's data with no configuration required. It shows EDD breach rate, total orders, orders per day, a 7-day sparkline, and per-stage breach rates at a glance. Breach counts are clickable and open a filtered list of the exact orders driving that number. Stage health now distinguishes soft breaches (within a defined buffer, shown in amber) from hard breaches (past the buffer, shown in red) — so meetings can differentiate operational noise from genuine failures without any manual interpretation.
 
 **Top Fires — automatic triage**
 A 3-level pivot (City → Dark Store → Courier) surfaces the worst-performing combinations ranked by breach percentage. Cities are collapsed by default so the highest-priority fires are visible immediately without scrolling.
 
 **Promise Window Analysis**
-Orders segmented by the gap between order creation and the promised delivery time — bucketed into five ranges from under 30 minutes to over 24 hours. Surfaced an important insight: orders with derived EDDs cluster almost entirely in the ≤30-minute bucket, meaning they are inherently high-risk and should be interpreted separately.
+Orders segmented by the gap between order creation and the promised delivery time — bucketed into five ranges from under 45 minutes to over 24 hours. Surfaced an important insight: orders with derived EDDs cluster almost entirely in the ≤45-minute bucket, meaning they are inherently high-risk and should be interpreted separately.
 
 **Ops Deep Dive — the investigation view**
-A hierarchical table (City → Dark Store → Courier) lets ops managers drill into specific combinations, view weighted average stage times, and export filtered data as a CSV. Export filenames are auto-generated with active filters embedded so downloaded files are self-describing.
+A hierarchical table (City → Dark Store → Courier) lets ops managers drill into specific combinations, view weighted average stage times colour-coded by SLA health, and export filtered data as a CSV. Export filenames are auto-generated with active filters embedded so downloaded files are self-describing. Includes a dedicated table surfacing ≤45-minute orders incorrectly assigned to Delhivery — a recurring misassignment pattern that the pivot alone wouldn't catch.
 
 **DN Lookup — the order-level view**
-Any individual delivery note can be looked up by ID and will show the full supply chain timeline across all stages with IST timestamps, breach attribution, and the specific stage responsible for the delay. Replaced a manual investigation process that previously required querying the database directly.
+Any individual delivery note can be looked up by ID and will show the full supply chain timeline across all stages with IST timestamps, breach attribution, and the specific stage responsible for the delay. The last-mile stage (S4) is now broken into four sub-stages — AWB to pickup, pickup to RAD, RAD to delivery attempt, and attempt to delivered — each timestamped individually from the courier's own system. Stage breach pills show at a glance whether each stage was within SLA, a soft breach, or a hard breach. Replaced a manual investigation process that previously required querying the database directly.
+
+**Full Last-Mile Visibility (S4)**
+The courier's CP database is now joined into the tracking table, surfacing timestamps for pickup, rider-at-door (RAD), first delivery attempt, and delivery completion. RAD time serves as a key EDD breach signal: if the rider arrived at the customer's door before the promised time, the order is considered on-time regardless of what happened after — recognising that a missed delivery after RAD is a customer-side event, not a supply chain failure. This definition was deliberately calibrated: a previous condition counting "delivery attempted within 4 minutes of EDD" was dropped after simulation showed it was masking genuine breaches.
 
 **Bad EDD Detection**
 The system flags orders where the promised delivery time was set before the order was created — a Shopify data quality issue that would otherwise silently inflate breach rates.
@@ -453,23 +456,29 @@ Every CSV export is logged with the user, timestamp, active filters, and row cou
 ### How AI Was Used
 This project was designed and built end-to-end using Claude Code — with zero boilerplate or starter templates. The process was not "generate and paste." It was a structured product conversation where I held every meaningful decision and used the AI purely as an execution engine.
 
-- **I defined the business rules.** SLA thresholds, what counts as a breach, how to handle warehouse operating hours in S2, pharma vs. non-pharma separation, IST timezone handling, the 5% alert threshold — none of these came from the AI.
+- **I defined the business rules.** SLA thresholds, what counts as a breach, how to handle warehouse operating hours in S2, pharma vs. non-pharma separation, IST timezone handling, the 5% alert threshold, soft vs. hard breach buffers, and the precise conditions under which an EDD is considered met — none of these came from the AI.
 - **I caught the AI's wrong assumptions.** The AI guessed column names that didn't exist in our schema. It initially optimised the query for in-memory compute rather than a transactional database. It defaulted to Google OAuth without recognising that our users span beyond the Supertails Google workspace. Each time, I identified the error and corrected the direction.
-- **I made the architectural calls.** Switching from Google OAuth to ERPNext OAuth2 mid-build required designing a custom NextAuth provider from scratch against Frappe's OAuth2 API. The AI implemented it. I decided it was necessary and why.
-- **I identified scope boundaries.** Deferring returns tracking and the Last Mile stage, building courier normalisation at the application layer instead of SQL, routing cron jobs through cron-job.org instead of paying for Vercel Pro — these were cost, complexity, and timeline trade-offs that required product and operational judgement.
+- **I made the architectural calls.** Switching from Google OAuth to ERPNext OAuth2 mid-build required designing a custom NextAuth provider from scratch against Frappe's OAuth2 API. Joining the courier's CP database for last-mile timestamps required understanding how reference numbers were formatted across systems (`PRD-` prefix on ER's side) and deciding which timestamps were trustworthy enough to serve as SLA signals. The AI implemented these. I decided they were necessary and why.
+- **I calibrated the breach definition over time.** After last-mile data was live, I ran simulations on the impact of each breach condition. One condition — "delivery attempted within 4 minutes of EDD" — was dropped because it masked genuine breaches. This was a product judgement call backed by data, not a technical fix.
+- **I identified scope boundaries.** Deferring returns tracking, building courier normalisation at the application layer instead of SQL, routing cron jobs through cron-job.org instead of paying for Vercel Pro — these were cost, complexity, and timeline trade-offs that required product and operational judgement.
 
 ### Outcome
 - Live internal dashboard, accessible to all approved ERPNext users via single sign-on
 - Command Centre view built for leadership meetings — zero configuration, fires surfaced automatically on open
+- Soft/hard breach distinction across all stages — meetings now differentiate noise from genuine failures without manual filtering
+- Full last-mile visibility: courier pickup, RAD, delivery attempt, and delivery timestamps joined from the courier's own system
 - Top Fires pivot replacing the manual "what's causing this?" conversation in every ops review
-- Deep Dive table with multi-select filtering and self-describing CSV export
-- DN-level timeline for individual order debugging across all supply chain stages
+- Deep Dive table with multi-select filtering, SLA-coloured stage averages, and self-describing CSV export
+- DN-level timeline with S4 sub-stage breakdown, stage breach pills, and current-stage tracking for individual order debugging
 - Automated breach alert emails triggered hourly when daily breach rate exceeds 5%
 - Daily export activity report surfacing tool adoption across the team at 10:30 PM IST
 - Full source code on private GitHub, deployable by anyone on the team
 
 ### Key Technical Decisions
 - **Data architecture:** MySQL rebuild query redesigned from scratch — restructuring CTEs, adding raw timestamp columns, handling warehouse-hours-adjusted SLA calculations for S2 (06:30–22:00 IST)
+- **Last-mile join:** Courier CP database joined via `cp.reference_number = CONCAT('PRD-', dn_number)`. Timestamps cast as CHAR(25) to bypass MySQL 8 error 1525 on datetime columns
+- **EDD breach definition:** Three-condition OR — RAD ≤ EDD, delivered ≤ EDD+5min, or in transit with EDD not yet passed. A fourth condition (delivery attempted ≤ EDD+4min) was explicitly dropped after simulation showed it masked ~6 additional breaches on a typical ≤45-minute day
+- **Soft/hard breach buffers:** S1 +30s, S2 +120s, S3 +30s. Designed to distinguish operationally tolerable overruns (amber) from genuine failures (red) without manual interpretation
 - **Auth:** ERPNext OAuth2 via a custom NextAuth provider against Frappe's OAuth2 API. Any @supertails.com email allowed
 - **Courier normalisation:** Built at the application layer using substring matching. Adding a new courier variant requires one line of code and a deploy — no database changes
 - **Infrastructure:** Vercel Hobby (free) + cron-job.org (free) for all scheduled jobs
