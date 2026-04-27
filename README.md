@@ -485,6 +485,24 @@ This project was designed and built end-to-end using Claude Code — with zero b
 - **Multi-select filters:** Selections buffered internally and applied on an explicit click — preventing re-queries on every checkbox interaction. Filter state is URL-encoded and persists when navigating between views
 - **Freshness:** Computed from the latest pipeline event timestamps in the data itself, not the ETL run time. Data refreshes every 30 minutes
 
+### 27th Apr 2026 — Dashboard Updates
+
+#### Breach Depth Breakdown for ≤45m Window
+Added an expandable sub-bucket under the ≤45m promise window row in the Orders by Promise Window table. When the ▸ chevron is clicked, it shows how far breached orders ran past the 45-minute promise — expressed as absolute delivery time so severity is readable without mental arithmetic:
+
+- **45–60m** — delivered 0–15 minutes late
+- **60–90m** — delivered 15–45 minutes late
+- **>90m** — delivered more than 45 minutes late
+- **Still in transit** — not yet delivered at time of data snapshot
+
+Each sub-row shows the count of breached orders in that band and its share of total ≤45m breaches. Counts are clickable and open a filtered DN list. The breakdown collapses by default; clicking the chevron or the ≤45m row header expands it.
+
+#### DN Lookup — Multi-Mode Search
+DN Lookup now accepts three identifier types from a single search bar: **DN number**, **AWB**, and **Shopify Order number**. A mode dropdown to the left of the input switches context; the placeholder text updates to match. Previously, only DN numbers were supported.
+
+#### Mobile Optimisation
+Command Centre and DN Lookup pages audited and fixed for mobile web: NavTabs overflow, KPI card layout on small screens, and long-string wrapping in DN header grid cells resolved. Touch targets on breach depth sub-rows increased to meet mobile tap-area standards.
+
 ---
 
 ## 12th Apr 2026 — ST-ERP Platform: Second Batch of Releases
