@@ -1668,4 +1668,46 @@ S3 went from a single-block stage to four sub-stages. The decision to add T7a (I
 
 The decisions that determine whether this work is valuable — which columns to group by, what the absolute SLA thresholds should be, whether to remove the trend chart, which percentiles to surface, what the pre-ops badge should say, how to split S3 — are product decisions that require domain knowledge. Claude Code built every component. It did not make any of those decisions. The PM's job was to know what to ask for with enough precision that the output was correct the first time.
 
+---
+
+## 18th May 2026 — OTP Toggle for Last-Mile Delivery (ElasticRun × Clickpost)
+
+<!-- tags: otp-toggle, clickpost, elasticrun, last-mile, awb-creation, vendor-coordination, skip_otp, pilot, hypothesis-driven, false-delivery, cohort -->
+
+**Initiative:** Piloting OTP-verified last-mile delivery via a controlled toggle
+
+**The hypothesis**
+
+False "delivered" signals — where a package is marked delivered but not received — are a known last-mile integrity problem. The hypothesis is that requiring OTP at handoff ensures the package reaches the correct person, reducing both false delivery signals and the customer disputes that follow. Before a full rollout, the risk is unknown: OTP adds friction at the door, and that friction could increase failed delivery attempts in certain cohorts. The pilot is designed to test the hypothesis before committing to it at scale.
+
+**What I did**
+
+Designed a pilot approach: rather than enabling OTP globally, I structured the rollout around a geographic toggle — enabling OTP for a specific area cohort and measuring impact on delivery success rate and false delivery signals before expanding. This required identifying that the `skip_otp` Boolean in the ElasticRun AWB Creation API was the right lever, and then coordinating with Clickpost (who surfaces that API) to ensure the configuration could be managed at the order level.
+
+Initiated the vendor coordination by emailing Clickpost (subject: *"Enabling OTP Toggle"*) with the technical context from ElasticRun, and looped in ElasticRun stakeholders (Karthikeyan Y, Sahil Gupta) directly so Clickpost has an escalation path for carrier-side questions.
+
+---
+
+#### **[PM SKILL: Hypothesis-Driven Product Thinking]** Grounded the initiative in a falsifiable hypothesis before committing to build
+
+The decision to enable OTP was not driven by instinct or a stakeholder request — it was grounded in a specific causal hypothesis: OTP verification → correct-person handoff → fewer false delivery signals → fewer customer disputes. Making the hypothesis explicit forces the pilot design to be falsifiable: if OTP does not reduce false delivery signals in the test cohort, the hypothesis is wrong and the feature should not scale. A PM who cannot state their hypothesis before building cannot tell whether the feature worked.
+
+---
+
+#### **[PM SKILL: Controlled Rollout Design]** Designed a cohort-based pilot to test a high-friction change before committing to scale
+
+OTP adds friction at the door. In some delivery contexts, that friction increases failed attempts — the customer isn't available, can't retrieve the OTP, or the rider moves on. Rolling out OTP globally before understanding that trade-off would risk harming delivery success rates across the board. The toggle is not a convenience feature — it is the pilot control mechanism. By scoping OTP to a specific geographic cohort, the pilot generates a clean comparison: same carrier, same SLA baseline, same order types, different OTP requirement. That design produces a result that can be acted on.
+
+---
+
+#### **[PM SKILL: Vendor Coordination]** Structured a single cross-vendor thread that prevents the two systems from talking past each other
+
+The OTP toggle sits at the intersection of two vendor surfaces: Clickpost (API configuration) and ElasticRun (carrier integration). Rather than initiating two separate threads and letting each vendor discover the other mid-conversation, I looped both into a single email with explicit guidance on who owns what. Clickpost owns the API-layer enablement; ElasticRun stakeholders are named as the escalation path for carrier-side questions. This eliminates the most common failure mode in cross-vendor coordination — each party assuming the other has context they don't have.
+
+---
+
+#### **[PM SKILL: Translating Technical Vendor Input into a Scoped Request]** Converted ElasticRun's API guidance into an actionable, self-contained vendor request
+
+ElasticRun's input was a technical signal: use `skip_otp` (Boolean) in the AWB Creation API. The PM's job was to understand what that implies on Clickpost's side — that their platform must support passing that field at the order level, and that this is a configuration enablement ask, not a new feature build. The email specifies the field name, the data type, and the source of the guidance. Clickpost can act on it without a discovery call. The difference between a vague request and a precise one is often the difference between a two-week back-and-forth and a same-week resolution.
+
 <!-- END:PM-SHOWCASE -->
