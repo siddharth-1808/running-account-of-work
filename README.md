@@ -1711,3 +1711,84 @@ The OTP toggle sits at the intersection of two vendor surfaces: Clickpost (API c
 ElasticRun's input was a technical signal: use `skip_otp` (Boolean) in the AWB Creation API. The PM's job was to understand what that implies on Clickpost's side — that their platform must support passing that field at the order level, and that this is a configuration enablement ask, not a new feature build. The email specifies the field name, the data type, and the source of the guidance. Clickpost can act on it without a discovery call. The difference between a vague request and a precise one is often the difference between a two-week back-and-forth and a same-week resolution.
 
 <!-- END:PM-SHOWCASE -->
+
+---
+
+## 27th May 2026 — EDD Logging, OTP-Controlled Delivery, Inventory Reco Fix & IWT DN Unblock
+
+**Management summary**
+
+This release improves delivery-time observability, webhook reliability, OTP-controlled delivery, inventory reconciliation accuracy, and IWT operational continuity:
+
+- EDD calculations are now fully logged, making it possible to trace discrepancies between Shopify and ERP delivery times.
+- Clickpost AWB creation now reads a per-warehouse OTP Required flag and passes the corresponding `skip_otp` toggle, enabling OTP-controlled delivery.
+- Inventory reconciliation signals are now filtered to act only on sellable bins, fixing reconciliation failures for warehouses with multiple bin types.
+- A temporary client-script fix restores the "Create → Internal Purchase Receipt" button on completed IWT Delivery Notes.
+
+---
+
+### 1. Implement Logging for EDD
+**Jira:** STERP26-288
+
+**What changed**
+- Added comprehensive logging around the Estimated Delivery Date (EDD) calculation pipeline.
+- Previously, EDD discrepancies between Shopify (e.g., 30 min) and ERP (e.g., 45 min) were untraceable because no logs existed for intermediate calculation steps.
+- Logs now capture each step of the EDD computation, making it possible to pinpoint where and why additional time buffers are introduced.
+
+**Business impact**
+- Operations and product teams can now debug EDD mismatches without guesswork.
+- Enables data-driven tuning of delivery-time estimates, improving customer promise accuracy.
+- Provides an audit trail for regulatory or SLA discussions around delivery commitments.
+
+**Key people:** PM: Siddharth Chauhan · Dev: Prashant Kumar · QA: Manoj Jadhav
+
+---
+
+### 2. OTP Field to Clickpost
+**Jira:** STERP26-369
+
+**What changed**
+- Added a new `otp_required` field (yes/no) to the Warehouse doctype; mandatory on new warehouse creation, defaulted to "no" for existing warehouses.
+- Clickpost AWB Creation API now reads the warehouse's `otp_required` value and passes the corresponding `skip_otp` flag:
+  - `otp_required = "no"` → `skip_otp = "true"`
+  - `otp_required = "yes"` → `skip_otp = "false"`
+
+**Business impact**
+- Enables per-warehouse OTP control at the time of delivery, supporting regulatory and business requirements for high-value or restricted shipments.
+- Automates what was previously a manual Clickpost configuration step.
+- Provides a foundation for the STERP26-428 enhancement that limits OTP mandating to warehouse-level hierarchy only (not bins).
+
+**Key people:** PM: Siddharth Chauhan · Dev: Narasimha Gupta · QA: Subhajit Saha
+
+---
+
+### 3. Filter Sellable Bins to Act on Inv Reco Signals
+**Jira:** STERP26-376
+
+**What changed**
+- Updated inventory reconciliation signal processing to filter only sellable bins (as configured in Supertails settings) before adjusting stock.
+- Previously, the reconciliation mechanism failed or produced incorrect adjustments for warehouses with multiple bin types (sellable, damaged, quarantine, etc.) because it couldn't distinguish which bins to act on.
+- Fix was identified through the KR Puram dark store case where reco signals were applied against non-sellable bins.
+
+**Business impact**
+- Prevents incorrect stock adjustments on non-sellable bins (damaged, QC hold, quarantine), protecting reserved and segregated inventory.
+- Extends the inventory reconciliation improvements from STERP26-272 to multi-bin warehouse configurations.
+- Reduces manual correction signals and post-reco data fixes for dark stores and complex warehouse setups.
+
+**Key people:** PM: Siddharth Chauhan · Dev: Narasimha Gupta · QA: Subhajit Saha
+
+---
+
+### 4. [Temporary Fix] Show "Create → Internal Purchase Receipt" on Completed IWT DNs
+**Jira:** STERP26-422
+
+**What changed**
+- Added a client-script fix to show the **Create** button with the **Internal Purchase Receipt** dropdown option on Delivery Notes where: Status = Completed, Channel = IWT, and no Purchase Receipt has been generated yet.
+- Temporary UI fix to unblock operations while a permanent backend solution is developed.
+
+**Business impact**
+- Unblocks warehouse teams who could not create Internal Purchase Receipts for completed IWT DNs, causing goods-receipt backlogs.
+- Prevents IWT flows from getting stuck in a state where stock is shipped but not formally received at the target warehouse.
+- Marked as temporary — a permanent fix will follow.
+
+**Key people:** PM: Siddharth Chauhan · Dev: Narasimha Gupta · QA: Subhajit Saha
