@@ -1841,9 +1841,10 @@ Four tickets in a single release, spanning three different developers (Prashant 
 
 Investigated two error alerts triggered during Shopify-to-ERPNext order processing (orders ST292371112507 and ST292371312507). Both orders were eventually fulfilled, but only because a retry mechanism stepped in after the primary process failed. Investigation revealed two distinct bugs in the fulfilment pipeline, neither of which had been previously identified. Customers were not impacted, but the system is one retry failure away from orders falling through silently.
 
-- **Bug 1 (Active, every order):** The shipping address lookup queries the wrong database table — the failure is caught silently, and the retry job has become the de facto primary pipeline. Fix effort: < 1 day. Priority: immediate.
+- **Bug 1 (Active, every order since at least 13 May 2026):** The shipping address lookup queries the wrong database table — the failure is caught silently and triggers a **two-error cascade** (a second downstream address mapping failure fires on every order). The retry absorbs both silently and has become the de facto primary pipeline. Scale: **479,862 error log entries; ~18,000 unique orders affected; ~4,300 orders/day**. Fix effort: < 1 day. Priority: immediate.
 - **Bug 2 (Latent):** The Clickpost integration continues executing after a missing address is detected, crashing with a cryptic error instead of stopping cleanly. Not yet triggered in production, but a single Delivery Note without an address will silently block fulfilment. Fix effort: < 1 day. Priority: next release.
 - **Version control gap:** Production `api.py` is ~400 lines ahead of GitHub. If a server rebuild is needed, recent code could be lost. The team should commit the production codebase to GitHub as a matter of urgency.
+- **Error log retention risk:** The 14-day retention policy means pre-May 13 logs are already purged and evidence is being lost daily. The log is now functionally blind — 479K error entries means genuine critical alerts cannot surface through the noise. Retention should be extended to 90 days immediately.
 
 ---
 
@@ -1851,15 +1852,23 @@ Investigated two error alerts triggered during Shopify-to-ERPNext order processi
 
 **What was found**
 - Orders ST292371112507 and ST292371312507 triggered error alerts during Shopify-to-ERPNext sync.
-- Error logs showed 3 × "Error getting shipping address" entries per order.
 - Root cause: `get_modified_dn` in `supertails/api.py` queries `is_shipping_address` on `tabDynamic Link` — a child link table that does not contain this column. The query fails with `pymysql.err.OperationalError: (1054, "Unknown column 'is_shipping_address' in 'WHERE'")`.
 - The exception is caught silently, execution continues with `shipping_address = None`.
-- The retry job re-runs via a different code path and succeeds — making the retry the de facto primary pipeline for every order.
+- Bug 1 produces a **two-error cascade per order**: (1) `get_modified_dn` fails → `shipping_address = None`; (2) downstream address mapping system receives blank address → tries Offline Address Mapping → fails → not AHS → second error logged. The retry absorbs both silently.
+- What is missing when `shipping_address = None`: `drop_address`, `drop_phone`, `drop_email`. Routing fields (pincode, city, state) come from a different source and remain intact — customers are not impacted.
+- The retry job re-runs via a different code path and succeeds — but it was designed as a safety net, not the main pipeline.
+
+**Scale**
+- Bug active since: at least 13 May 2026 (true start unknown — older logs purged under 14-day retention)
+- Total error log entries generated: **479,862**
+- Unique orders affected: **~18,000**
+- Orders impacted per day: **~4,300**
 
 **Risk**
 - No safety net remains: if the retry fails (infra issue, volume spike, deployment), orders fall through silently.
 - Every order pays the compute cost twice (failed primary + retry), adding latency to every fulfilment.
-- Constant retry firing masks genuine critical failures in error logs.
+- The error log is functionally blind — 479K entries means genuine critical alerts cannot surface through the noise.
+- One fix eliminates both errors in the cascade: the downstream address mapping failure only exists because `shipping_address = None`.
 
 **Fix**
 - Split the query into two steps: (1) fetch linked addresses from `tabDynamic Link`, (2) filter for `is_shipping_address = 1` on `tabAddress`. Fix effort: < 1 day.
@@ -1895,6 +1904,21 @@ Investigated two error alerts triggered during Shopify-to-ERPNext order processi
 
 ---
 
+### 4. Error Log Retention: Evidence Being Lost Daily
+
+**What was found**
+- Oldest surviving error log entry: 13 May 2026 at 19:20 — sitting right at the 14-day retention limit.
+- True bug start date is unknown; pre-May 13 logs have been purged.
+- With 479,862 entries in the log, the signal-to-noise ratio is so low that genuine critical alerts cannot surface.
+
+**Risk**
+- Any investigation into pre-May 13 activity is impossible — the evidence has been deleted.
+- Every additional day without a fix or a retention extension destroys more of the audit trail.
+
+**Action required:** Extend ERPNext error log retention from 14 to 90 days immediately.
+
+---
+
 ### How Claude Code Was Used in This Investigation
 
 This investigation used Claude Code as an active debugging collaborator throughout — not as a search tool, but as a reasoning partner across eight distinct tasks.
@@ -1904,21 +1928,29 @@ This investigation used Claude Code as an active debugging collaborator througho
 | Interpreting the generic error message | Explained that the wrapper error was a pointer, not a diagnosis, and identified where to look next |
 | Parsing the full traceback | Identified root cause, the exact failing SQL query, and that the exception was silently caught — all buried several frames deep |
 | Cloning and searching repositories | Cloned all three relevant repos (`supertails`, `ecommerce_integrations`, `clickpost`) and searched across them simultaneously |
+| Identifying version control mismatch | Found production `api.py` had 400+ more lines than GitHub — flagged as a separate, independent risk |
 | Identifying the fix | Diagnosed the wrong-table query and wrote the corrected two-step query |
 | Discovering Bug 2 | Proactively read the Clickpost repo after Bug 1 was found and flagged the broken error-handling pattern |
 | Drafting and iterating the bug report | Produced, updated, and revised the bug report across multiple iterations as understanding deepened |
-| Writing the management summary | Translated technical findings into plain-English operational impact for non-technical stakeholders |
+| Quantifying blast radius | Queried `erp_dn_logs_2` in `shopifyBase` and cross-referenced with ERPNext Error Log screenshots to produce 479,862 / ~18,000 / ~4,300/day figures |
+| Validating scope with performance data | Reconciled findings against the S1 heatmap (P95 = 1m 36s, 18,126 orders since May 10) to confirm order creation was unaffected |
+| Connecting the cascade | Identified the downstream address mapping failure as a consequence of Bug 1 — not a separate root cause — collapsing both errors into a single fix |
+| Writing the management summary | Translated all technical findings into plain-English business impact for non-technical stakeholders |
 | Challenging assumptions | Re-analysed the traceback when business context (orders were fulfilled) contradicted the initial technical conclusion |
 
 The investigation also surfaced a reusable set of debugging principles from this session:
 
 1. Surface errors are pointers, not diagnoses. Always go one level deeper.
-2. Read the full traceback. The last line gives the error type; the rest gives the cause.
-3. Reconcile technical findings with business outcomes. An error log entry ≠ an operational failure.
-4. A retry that fires every time is not resilience — it is a broken primary job.
-5. Audit the surrounding code. One bug often reveals a second nearby.
-6. Version control must match production. A mismatch is a risk in itself.
-7. Severity is determined by eventual outcome and remaining resilience, not by the presence of errors.
+2. Read the full traceback. The last line gives the error type; the rest gives the cause, context, and consequence.
+3. Error logs contain successes too. Read both sides before concluding.
+4. Reconcile technical findings with business outcomes. An error log entry ≠ an operational failure.
+5. A retry that fires every time is not resilience — it is a broken primary job.
+6. Audit the surrounding code. One bug often reveals a second nearby.
+7. Version control must match production. A mismatch is a risk in itself.
+8. Severity is determined by eventual outcome and remaining resilience, not by the presence of errors.
+9. Error log retention is evidence retention. A 14-day policy means any bug older than two weeks has no surviving paper trail.
+10. Validate impact against real pipeline data. Performance heatmaps and query results can change the severity of a finding significantly.
+11. Follow a bug to its downstream consequences. A single root cause can produce multiple visible failures across different systems. The full cascade matters — and fixing the root collapses all of it.
 
 ---
 
